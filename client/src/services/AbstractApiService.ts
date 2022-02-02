@@ -1,0 +1,147 @@
+import { ref } from 'vue'
+import type { AxiosError, AxiosInstance, AxiosResponse } from 'axios'
+import axios from 'axios'
+import { useMessage, MessageApi, commonDark, useLoadingBar } from 'naive-ui'
+
+export function isAxiosError(value: any): value is AxiosError {
+    return typeof value?.response == 'object'
+}
+
+
+export abstract class AbstractApiService 
+{
+    protected readonly http: AxiosInstance
+    protected readonly message: MessageApi
+    protected readonly loadingBar
+
+    public isLoading
+
+    protected constructor(
+        protected readonly path?: string,
+        protected readonly baseURL: string = import.meta.env.VITE_API_URL as string
+    )
+    {
+        this.message = useMessage()
+        this.loadingBar = useLoadingBar()
+        this.isLoading = ref<boolean>(false)
+
+        if(path) {
+            baseURL += path
+        }
+        this.http = axios.create({
+            baseURL,
+            //.. other config e.g JWT token & data
+        })
+        
+        // Setting up interceptors to change isLoading value
+        this.http.interceptors.request.use(
+            config => {
+                this.isLoading.value = true
+                this.loadingBar.start()
+                return config
+            },
+            error => {
+                this.isLoading.value = false
+                this.loadingBar.error()
+                return Promise.reject(error)
+            }
+        )
+        this.http.interceptors.response.use(
+            response => {
+                this.isLoading.value = false
+                this.loadingBar.finish()
+                if(! response.data.success) return Promise.reject(response)
+                return response
+            },
+            error => {
+                this.isLoading.value = false
+                this.loadingBar.error()
+                return Promise.reject(error)
+            }
+        )
+        this.http.defaults.headers.common['Accept'] = 'application/json;charset=UTF-8';
+        this.http.defaults.headers.common['Content-Type'] = 'application/json;charset=UTF-8';
+        this.loadHeaderToken()
+    }
+
+    protected createParams(record: Record<string, any>): URLSearchParams 
+    {
+        const params: URLSearchParams = new URLSearchParams();
+        for (const key in record) {
+            if (Object.prototype.hasOwnProperty.call(record, key)) {
+                const value: any = record[key];
+                if (value !== null && value !== undefined) {
+                    params.append(key, value);
+                } else {
+                    console.debug(`Param key '${key}' was null or undefined and will be ignored`);
+                }
+            }
+        }
+        return params;
+    }
+
+    protected handleResponse(response: AxiosResponse<{data:any, success: boolean, code: number}>) {
+        return response.data.data;
+    }
+
+    protected handleError(error: unknown): never {
+        if (error instanceof Error) {
+            console.log({error})
+            if (isAxiosError(error)) {
+                if (error.response) {
+                    // TODO: make errors more user friendly and checking the errors array
+                    if(error.response.data?.errors && error.response.data.errors[Object.keys(error.response.data.errors)[0]][0]) {
+                        console.log(error.response.data.errors[Object.keys(error.response.data.errors)[0]][0])
+                        this.message.error(error.response.data.errors[Object.keys(error.response.data.errors)[0]][0])
+                    }
+                    else if(error.response.data !== undefined && error.response.data.message){
+                        console.log(error.response.data.message)
+                        this.message.error(error.response.data.message)
+                        if(error.response.data.message == 'Unauthenticated.'){
+                            console.log('redirecting to login')
+                            window.location.reload();
+                        }
+                    }
+                    else if(error.response.data?.status){
+                        this.message.error(error.response.data.status)
+                    }
+                    // console.log(error.response.data);
+                    // console.log(error.response.status);
+                    // console.log(error.response.headers);
+                    throw error;
+                } else if (error.request) {
+                    // The request was made but no response was received
+                    // `error.request` is an instance of XMLHttpRequest in the browser
+                    // console.log(error.request);
+
+                    this.message.error('une erreur s\'est produite, veuillez vérifier votre connexion Internet')
+                    throw new Error(error as any);
+                }
+            } else {
+                // Something happened in setting up the request that triggered an Error
+                this.message.error('une erreur s\'est produite, veuillez vérifier votre connexion Internet')
+                // console.log('Error', error.message);
+                throw new Error(error.message);
+            }
+        }
+        throw new Error(error as any);
+    }
+
+    protected setHeaderToken(token?: string) 
+    {
+        this.http.defaults.headers.common['Authorization'] = `Bearer ${token}`
+        if(token) {
+            localStorage.setItem('jwt_token', token)
+            this.loadHeaderToken()
+        } else {
+            localStorage.removeItem('jwt_token')
+        }
+    }
+
+    protected loadHeaderToken()
+    {
+        if(localStorage.getItem('jwt_token')){
+            this.http.defaults.headers.common['Authorization'] = `Bearer ${localStorage.getItem('jwt_token')}`
+        }
+    }
+}
